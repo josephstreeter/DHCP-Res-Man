@@ -1,9 +1,15 @@
+# DHCP Reservation Management
+### Concept
+All hosts in the environment are configured with a static IP address or assigned a DHCP reservation. Firewall rules for DHCP configured hosts are provisioned from separate lists of IP addresses that are consumed by the firewall. Hosts are grouped by type of host and entered into a list so that the firewall assigns the IPs to the appropriate set of rules. 
+
+The IP lists are created by enumerating the DHCP reservations and grouping them by the data provided in the Description field. Because of the importance of having accurate description information the script will provide the consistency required for proper grouping. Through automating the creating, updating, deleting, and exporting of the DHCP reservations the possibility of human error is significantly reduced. 
+
 ### Infrastructure
 Terminal Server - Where the script is executed from
 Utility Server - Hosts the script, required files, and the IIS root directory where the list files are created
 DHCP Servers - Two server hosts with the DHCP role installed and configured for failover
 
-#Setup<br>
+### Setup<br>
 
 On the utility server create two CIF shares. One share represents the 
 directory served by the web server to provide access to the list files
