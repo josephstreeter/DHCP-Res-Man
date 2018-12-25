@@ -5,8 +5,8 @@ directory served by the web server to provide access to the list files
 and the other will contain the script files and various output files. 
 
 Example:<br>
-\\\server\scripts\<br>
-\\\server\www<br>
+\\\server\scripts\ <br>
+\\\server\www <br>
 
 Within the scripts share several sub-directories are required for archive,
 logs, script modules, and the groups file. The script itself can be located
