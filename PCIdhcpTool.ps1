@@ -1,3 +1,5 @@
+#v1.1
+
 # Load Functions
 
 function validate-IPAddress($data)
@@ -85,8 +87,8 @@ function Create-XMLFile($Path)
 
 function Import-Config()
     {
-    $ConfigFile="\\PCI-UTIL-A1\DHCP\ConfigFile.xml"
-    #$ConfigFile="\\192.168.0.101\scripts\ConfigFile.xml"
+    #$ConfigFile="\\PCI-UTIL-A1\DHCP\ConfigFile.xml"
+    $ConfigFile="C:\utilities\scripts\DHCP-Res-Man\ConfigFile.xml"
     if (-not (get-item $ConfigFile -ea SilentlyContinue))
         {
         Create-XMLFile $ConfigFile
@@ -164,7 +166,16 @@ Function Edit-FilterLists()
 
 function Replicate-Reservation()
     {
-    Invoke-DhcpServerv4FailoverReplication -ComputerName $DHCPServer -Force
+    try 
+        {
+        Invoke-DhcpServerv4FailoverReplication -ComputerName $DHCPServer -Force -ea stop
+        }
+    catch 
+        {
+        Show-Error $error[0]
+        Show-Information
+        }
+
     Pause
     }
 
@@ -176,11 +187,18 @@ function Archive-Lists($source,$Destination)
     
     if ((Get-ChildItem $src).count -ge 1)
         {
-        Compress-Archive -Path $Src -DestinationPath $Dst -Force
-        if (Get-Item $dst -ea SilentlyContinue)
+        try 
             {
+            Compress-Archive -Path $Src -DestinationPath $Dst -Force -ea stop
             "Archive Complete"
-            Remove-Item $src -Exclude web.config -Force
+            Log-Event "INFO-" "$env:USERNAME created Archive file - $Dst"
+            }
+        Catch {Show-Error $error[0]; Show-Information}
+
+        if (Get-Item $dst -ea stop)
+            {
+            try {Remove-Item $src -Exclude web.config -Force}
+            Catch {Show-Error $error[0]; Show-Information}
             }
         Else
             {
@@ -191,10 +209,9 @@ function Archive-Lists($source,$Destination)
     }
 
 Function Log-Event($EntryType,$Entry)
-    {
-    $date = get-date -uformat "%Y-%m-%d"
+    {   
     $datetime = get-date -uformat "%Y-%m-%d-%H:%m:%S"
-    $Logfile = $logDir+$date+"-logfile.txt"
+    $Logfile = $logLocation+"\"+$date+"-logfile.txt"
     
     if (get-item $Logfile -ea 0)
         {
@@ -209,6 +226,7 @@ Function Log-Event($EntryType,$Entry)
 function show-error($data)
     {
     Write-Host "Line: $($data.InvocationInfo.ScriptLineNumber) Character: $($error[0].InvocationInfo.OffsetInLine) $($error[0].InvocationInfo.Line.Trim()) $($error[0].CategoryInfo.Category) $($error[0].CategoryInfo.Reason)" -fore white -back red
+    Log-Event "ERROR" "Line: $($data.InvocationInfo.ScriptLineNumber) Character: $($error[0].InvocationInfo.OffsetInLine) $($error[0].InvocationInfo.Line.Trim()) $($error[0].CategoryInfo.Category) $($error[0].CategoryInfo.Reason)"
     Pause
     }
 
@@ -216,6 +234,8 @@ Function Show-Information()
     {
     Import-Config
     
+    $Global:date = get-date -uformat "%Y-%m-%d"
+    $Global:logLocation=$Config.Script.Config.Logs
     $Global:DHCPServer=$Config.Script.Config.DHCPServer
     $Global:GroupLocation=$Config.Script.Config.Groups
     $Global:FileLocation=$Config.Script.Config.Lists
@@ -305,6 +325,8 @@ function New-Reservation()
                 -hostname $results.hostname `
                 -ClientId $results.mac `
                 -ea stop
+
+            Log-Event "INFO-" "$env:USERNAME Created a reservation IP: $($results.IP) MAC: $($results.mac) Host: $($results.hostName)"
             }
         Catch 
             {
@@ -336,8 +358,10 @@ Function Remove-Reservation()
 
     If ($(Read-Host "Confirm deletion? (y/n)") -eq "y")
         {
-        Archive-Lists $FileLocation $FileLocation
+        # Archive-Lists $FileLocation $ArchiveLocation ** I think this is deleting the lists when we don't want it to. 
         $res | Remove-DhcpServerv4Reservation -ComputerName $DHCPServer
+        Log-Event "INFO-" "$env:USERNAME Removed a reservation IP: $($res.IPAddress) MAC: $($res.ClientID) Host: $($res.Name)"
+
         $res | % {Edit-FilterLists -list allow -Action remove -mac $_.ClientID -HostName $_.name}
         
         Replicate-Reservation
@@ -346,7 +370,7 @@ Function Remove-Reservation()
         {
         "No reservation to remove"
         }
-            
+         
     }
 
 Function Edit-Reservation()
@@ -377,7 +401,12 @@ Function Edit-Reservation()
         {
         1 {$NewMac=read-host "Enter new mac address"
             if ($mac -eq "auto"){$newmac=Generate-MacAddress}
-            try {Set-DhcpServerv4Reservation -ComputerName $DHCPServer -ea stop -IPAddress $res.IPAddress -ClientID $newmac} catch {show-error $Error[0]}
+            try 
+                {
+                Set-DhcpServerv4Reservation -ComputerName $DHCPServer -ea stop -IPAddress $res.IPAddress -ClientID $newmac
+                Log-Event "INFO-" "$env:USERNAME Modified a reservation IP: $($res.IPAddress) MAC: $($res.ClientID) Host: $($res.Name)"
+                } 
+            catch {show-error $Error[0]}
             try {Edit-FilterLists -ea stop -list allow -Action Remove -mac $res.ClientID -HostName $res.name} catch {show-error $Error[0]}
             try {Edit-FilterLists -ea stop -list allow -Action add -mac $NewMac -HostName $res.name} catch {show-error $Error[0]}
             }
@@ -396,7 +425,7 @@ Function Edit-Reservation()
 
 Function Export-Reservation()
     {
-    Archive-Lists $FileLocation $FileLocation
+    Archive-Lists $FileLocation $ArchiveLocation
 
     $Groups=Get-Content $GroupLocation\groups.txt
 
@@ -408,7 +437,11 @@ Function Export-Reservation()
             $Res | % {$($_.IPAddress[0].ToString())+" "+$_.Name} | Out-File "$FileLocation\$group.txt"
             }
         }
-    Return Get-ChildItem $FileLocation | ft LastWriteTime,Name -AutoSize 
+
+    $FIles=Get-ChildItem $FileLocation
+    Log-Event "INFO-" "$env:USERNAME Exported files $($Files)"
+    
+    Return $Files | ft LastWriteTime,Name -AutoSize 
     }
 
 Function Find-Reservation()
