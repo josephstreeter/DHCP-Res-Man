@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<Script>
+  <Config>
+    <DHCPServer>192.168.0.100</DHCPServer>
+    <Lists>\\192.168.0.101\www</Lists>
+    <Groups>\\192.168.0.101\scripts\groups</Groups>
+    <Logs>\\server\share\logs</Logs>
+    <Archive>\\192.168.0.101\scripts\archive</Archive>
+    <Module>\\192.168.0.101\module</Module>
+  </Config>
+</Script>
