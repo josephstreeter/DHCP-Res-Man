@@ -5,9 +5,9 @@ All hosts in the environment are configured with a static IP address or assigned
 The IP lists are created by enumerating the DHCP reservations and grouping them by the data provided in the Description field. Because of the importance of having accurate description information the script will provide the consistency required for proper grouping. Through automating the creating, updating, deleting, and exporting of the DHCP reservations the possibility of human error is significantly reduced. 
 
 ### Infrastructure
-Terminal Server - Where the script is executed from
-Utility Server - Hosts the script, required files, and the IIS root directory where the list files are created
-DHCP Servers - Two server hosts with the DHCP role installed and configured for failover
+Terminal Server - The host from which the script is executed <br>
+Utility Server - Hosts the script, required files, and the IIS root directory where the list files are created <br>
+DHCP Servers - Two server hosts with the DHCP role installed and configured for failover <br>
 
 ### Setup<br>
 
