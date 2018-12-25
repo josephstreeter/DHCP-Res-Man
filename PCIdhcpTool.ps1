@@ -197,7 +197,7 @@ function Archive-Lists($source,$Destination)
 
         if (Get-Item $dst -ea stop)
             {
-            try {Remove-Item $src -Exclude web.config -ea Stop -Force}
+            try {Remove-Item $src -Exclude web.config -Force}
             Catch {Show-Error $error[0]; Show-Information}
             }
         Else
