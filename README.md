@@ -1,4 +1,4 @@
-#Infrastructure
+### Infrastructure
 Terminal Server - Where the script is executed from
 Utility Server - Hosts the script, required files, and the IIS root directory where the list files are created
 DHCP Servers - Two server hosts with the DHCP role installed and configured for failover
