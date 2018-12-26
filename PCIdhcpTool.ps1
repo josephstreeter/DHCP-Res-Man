@@ -1,5 +1,9 @@
 #v1.1
 
+Param(
+    [Parameter(Mandatory=$True)][string]$ConfigFile
+    )
+
 # Load Functions
 
 function validate-IPAddress($data)
@@ -88,7 +92,7 @@ function Create-XMLFile($Path)
 function Import-Config()
     {
     #$ConfigFile="\\PCI-UTIL-A1\DHCP\ConfigFile.xml"
-    $ConfigFile="C:\utilities\scripts\DHCP-Res-Man\ConfigFile.xml"
+    #$ConfigFile="C:\utilities\scripts\DHCP-Res-Man\ConfigFile.xml"
     if (-not (get-item $ConfigFile -ea SilentlyContinue))
         {
         Create-XMLFile $ConfigFile
