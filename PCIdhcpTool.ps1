@@ -10,6 +10,7 @@ function validate-IPAddress($data)
     {
     $test="^(?:(?:0?0?\d|0?[1-9]\d|1\d\d|2[0-5][0-5]|2[0-4]\d)\.){3}(?:0?0?\d|0?[1-9]\d|1\d\d|2[0-5][0-5]|2[0-4]\d)$"
     $results = $data -match $test
+
     Return $results
     }
 
@@ -142,7 +143,7 @@ Function Edit-FilterLists()
     Param(
     [Parameter(Mandatory=$True)][string]$list,
     [Parameter(Mandatory=$True)][string]$Action,
-    [Parameter(Mandatory=$True)][ValidateScript({validate-data -data $_ -type MAC})][string]$mac,
+    [Parameter(Mandatory=$True)][ValidateScript({validate-HWAddress $_})][string]$mac,
     [Parameter(Mandatory=$True)][string]$HostName
     )
     $DHCPServers=(Get-DhcpServerInDC).DNSName      
@@ -153,12 +154,12 @@ Function Edit-FilterLists()
             {
             $res=Get-DhcpServerv4Filter -ComputerName $DHCPServer -List Allow | ? {$_.macaddress -eq $mac} 
             if ($res){"Mac filter exists"}
-            Else {Add-DhcpServerv4Filter -ComputerName $DHCPServer -List $List -MacAddress $mac -Description $HostName -Verbose}
+            Else {Add-DhcpServerv4Filter -ComputerName $DHCPServer -List $List -MacAddress $mac -Description $HostName -PassThru}
             }
         Elseif ($Action -eq "Remove")
             {
             $res=Get-DhcpServerv4Filter -ComputerName $DHCPServer -List Allow | ? {$_.macaddress -eq $mac} 
-            if ($res){remove-DhcpServerv4Filter -ComputerName $DHCPServer -MacAddress $mac -Verbose}
+            if ($res){remove-DhcpServerv4Filter -ComputerName $DHCPServer -MacAddress $mac -PassThru}
             Else {"No mac filter to remove"}
             }
         Else
@@ -185,15 +186,17 @@ function Replicate-Reservation()
 
 function Archive-Lists($source,$Destination)
     {
-    $datetime = $(get-date -uformat "%Y-%m-%d-%H:%m:%S").Replace(":","-")
+    $datetime = $(get-date -uformat "%Y-%m-%d-%H:%M:%S").Replace(":","-")
     $src="$source\*"
     $dst="$Destination\archive-$($datetime).zip"
     
-    if ((Get-ChildItem $src).count -ge 1)
+    $lists=Get-ChildItem $src -Exclude web.config
+    
+    if ($lists.count -ge 1)
         {
         try 
             {
-            Compress-Archive -Path $Src -DestinationPath $Dst -Force -ea stop
+            $lists | Compress-Archive -DestinationPath $Dst -Force -ea stop
             "Archive Complete"
             Log-Event "INFO-" "$env:USERNAME created Archive file - $Dst"
             }
@@ -232,6 +235,250 @@ function show-error($data)
     Write-Host "Line: $($data.InvocationInfo.ScriptLineNumber) Character: $($error[0].InvocationInfo.OffsetInLine) $($error[0].InvocationInfo.Line.Trim()) $($error[0].CategoryInfo.Category) $($error[0].CategoryInfo.Reason)" -fore white -back red
     Log-Event "ERROR" "Line: $($data.InvocationInfo.ScriptLineNumber) Character: $($error[0].InvocationInfo.OffsetInLine) $($error[0].InvocationInfo.Line.Trim()) $($error[0].CategoryInfo.Category) $($error[0].CategoryInfo.Reason)"
     Pause
+    }
+
+function New-Reservation()
+    {
+    $i=0
+    $scopes=@()
+    foreach ($scope in $(Get-DhcpServerv4Scope -ComputerName $DHCPServer))
+        {
+        $scopes+=New-Object psobject -Property @{"ID"=$i
+                                                 "Name"=$scope.name
+                                                 "Scope"=$scope.ScopeId
+                                                 "StartRange"=$scope.StartRange
+                                                 "EndRange"=$scope.EndRange
+                                                 }
+        $i++
+        }
+
+    $scopes | Select ID,Scope,Name,StartRange,EndRange | ft
+    $reservations=Get-DhcpServerv4Scope -ComputerName $DHCPServer | Get-DhcpServerv4Reservation -ComputerName $DHCPServer
+
+    do {$selection=Read-Host "Select scope"} Until ($scopes.id -contains $selection)
+
+
+
+    $r=@{}
+
+    $r.scope=$scopes[$selection].Scope.IPAddressToString
+
+    do {$r.ip=Read-Host "Enter Reservation IP"} 
+    until ((validate-IPAddress $r.ip) -and $(if ($reservations.ipAddress -contains $r.ip){$false;write-host -for white -back red "IP Address in use"}Else{$true}))
+
+    do {$r.mac=Read-Host "Enter MAC Address (aa-ab-ac-a2-a3-a4)"} 
+    until ((validate-HWAddress $r.mac) -and $(if ($reservations.ClientID -contains $r.mac){$false;write-host -for white -back red "MAC Address in use"}Else{$true}))
+    if ($r.mac -eq "auto"){$r.mac = Generate-MacAddress}
+
+    do {$r.HostName=Read-Host "Enter Reservation hostname"} 
+    until ($(if ($reservations.Name -contains $r.HostName){$false;write-host -for white -back red "Hostname in use"}Else{$true}))
+
+    $r.group=$(Get-Group)
+
+    $res = New-Object psobject -Property $r
+
+    $res | ft ip,HostName,Mac,Group
+
+    $response=Read-Host "Is this information correct? (Y/N)"
+    if ($response -ne "Y"){New-Reservation}
+
+    try {
+        Add-DhcpServerv4Reservation `
+            -ComputerName $DHCPServer `
+            -ScopeId $res.scope `
+            -IP $res.ip `
+            -Description $res.Group `
+            -hostname $res.HostName `
+            -ClientId $res.mac `
+            -ea stop
+
+        Log-Event "INFO-" "$env:USERNAME Created a reservation IP: $($res.IP) MAC: $($res.mac) Host: $($res.Name) Group: $($res.Group)"
+        }
+    Catch 
+        {
+        Show-Error $error[0]
+        Show-Information
+        }
+
+    try
+        {
+        Edit-FilterLists -list allow -Action add -mac $res.mac -HostName $res.hostname
+        }
+    catch
+        {
+        Show-Error $error[0]
+        Show-Information
+        }
+    Replicate-Reservation
+    }
+
+Function Remove-Reservation()
+    {
+    $data=Read-Host "Enter reservation information"
+        
+    $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | `
+    ? {($_.name -eq $data) -or ($_.ipaddress -eq $data) -or ($_.clientid -eq $data)}
+    
+    $res | ft -AutoSize
+
+    If ($(Read-Host "Confirm deletion? (y/n)") -eq "y")
+        {
+        # Archive-Lists $FileLocation $ArchiveLocation ** I think this is deleting the lists when we don't want it to. 
+        $res | Remove-DhcpServerv4Reservation -ComputerName $DHCPServer
+        Log-Event "INFO-" "$env:USERNAME Removed a reservation IP: $($res.IPAddress) MAC: $($res.ClientID) Host: $($res.Name)"
+
+        $res | % {Edit-FilterLists -list allow -Action remove -mac $_.ClientID -HostName $_.name}
+        
+        Replicate-Reservation
+        }
+   Else
+        {
+        "No reservation to remove"
+        }
+         
+    }
+
+Function Edit-Reservation()
+    {
+    $search=Read-Host "`nEnter reservation IP Address, Mac Address, or Hostname (enter 'q' to quit)"
+    if ($search -eq "q"){Show-Information}
+    
+    $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | `
+    ? {($_.name -eq $search) -or ($_.ipaddress -eq $search) -or ($_.clientid -eq $search)}
+
+    if (-not($res))
+        {
+        "Reservation not found`n"
+        Edit-Reservation
+        }
+
+    $data=@()
+    $data+=New-Object psobject -Property @{"State"="Old";"IPAddress"=$res.IPAddress;"Mac"=$res.ClientId;"Hostname"=$res.Name;"Group"=$res.Description}
+    
+    $data | ft IPAddress,Mac,Hostname,Group -AutoSize
+    If ((Read-Host "Is this the correct reservation (Y/N)") -ne 'Y'){Edit-Reservation}
+
+    "`t1 - MAC Address"
+    "`t2 - Host Name"
+    "`t3 - IP Address"
+    "`t4 - Group"
+    ""    
+    $Response=Read-Host "Select attribute to update"
+    $n=@{}
+
+    if ($Response -eq 1)
+        {
+        do {$n.mac=Read-Host "Enter MAC Address (aa-ab-ac-a2-a3-a4)"} 
+        until ((validate-HWAddress $n.mac) -and $(if ($reservations.ClientID -contains $n.mac){$false;write-host -for white -back red "MAC Address in use"}Else{$true}))
+        if ($n.mac -eq "auto"){$newmac = Generate-MacAddress}
+        }
+    Else
+        {
+        $n.mac=$data.Mac
+        }
+
+    if ($response -eq 2) 
+        {
+        do {$n.HostName=Read-Host "Enter Reservation hostname"} 
+        until ($(if ($reservations.Name -contains $n.HostName){$false;write-host -for white -back red "Hostname in use"}Else{$true}))
+        }
+    Else
+        {
+        $n.hostname=$data.hostname
+        }
+
+    if ($response -eq 3) 
+        {
+        do {$n.ip=Read-Host "Enter Reservation IP"} 
+        until ((validate-IPAddress $n.ip) -and $(if ($reservations.ipAddress -contains $n.ip){$false;write-host -for white -back red "IP Address in use"}Else{$true}))
+        }
+    Else
+        {
+        $n.ipAddress=$data.IPAddress
+        }
+
+    if ($response -eq 4) 
+        {
+        $n.group=Get-Group
+        }
+    Else
+        {
+        $n.Group=$data.Group
+        }
+    
+    $n.state = "New"
+        
+    $data+=New-Object psobject -Property $n
+    $data | ft State,IPAddress,Mac,Hostname,Group -AutoSize
+
+    If ((Read-Host "Is this the correct reservation (Y/N)") -ne 'Y'){Edit-Reservation}
+               
+    try 
+        {
+        Set-DhcpServerv4Reservation -ComputerName $DHCPServer -ea stop -IPAddress $data[1].IPAddress -ClientID $data[1].mac -Name $data[1].hostname -Description $data[1].Group
+        Log-Event "INFO-" "$env:USERNAME Modified a reservation IP: $($res.IPAddress) MAC: $($res.ClientID) Host: $($res.Name)"
+        } 
+    catch {show-error $Error[0]}
+
+    if ($response -eq 1)
+        {
+        try {Edit-FilterLists -ea stop -list allow -Action Remove -mac $res.ClientID -HostName $res.name} catch {show-error $Error[0]}
+        try {Edit-FilterLists -ea stop -list allow -Action add -mac $NewMac -HostName $res.name} catch {show-error $Error[0]}
+        }
+
+    Replicate-Reservation
+    }
+
+Function Export-Reservation()
+    {
+    Archive-Lists $FileLocation $ArchiveLocation
+
+    $Groups=Get-Content $GroupLocation\groups.txt
+
+    foreach ($Group in $Groups)
+        {
+        $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | ? {$_.description -eq $Group}
+        if ($res)
+            {
+            $Res | % {$($_.IPAddress[0].ToString())+" "+$_.Name} | Out-File "$FileLocation\$group.txt"
+            }
+        }
+
+    $FIles=Get-ChildItem $FileLocation -Exclude web.config
+    Log-Event "INFO-" "$env:USERNAME Exported files $($Files)"
+    
+    Return $Files | ft LastWriteTime,Name -AutoSize 
+    }
+
+Function Find-Reservation()
+    {
+    $data=Read-Host "`nEnter reservation information (enter 'q' to quit)"
+    
+    if ($data -eq "q"){Show-Information}
+    
+    $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | `
+        ? {($_.name -eq $data) -or ($_.ipaddress -eq $data) -or ($_.clientid -eq $data)  -or ($_.name -eq $data)  -or ($_.description -eq $data)}
+    
+    Return $res | ft -AutoSize
+    }
+
+Function Clean-Filters()
+    {
+    foreach ($reservation in $reservations)
+        {
+        if (-not(Get-DhcpServerv4Filter -ComputerName $DHCPServer -List Allow | ? {$_.MacAddress -eq $reservation.ClientID}))
+            {
+            Add-DhcpServerv4Filter -ComputerName $DHCPServer -List Allow -MacAddress $reservation.ClientID -Description $Reservation.Name -PassThru
+            }
+        }
+
+    foreach ($filter in $filters)
+        {
+        if ($reservations.clientID -notcontains $filter.MacAddress)
+            {
+            Remove-DhcpServerv4Filter -ComputerName $DHCPServer -MacAddress $filter.MacAddress -PassThru
+            }
+        }
     }
 
 Function Show-Information() 
@@ -282,201 +529,5 @@ Function Show-Information()
         Show-Information
         }
     }
- 
-################################################
-
-function New-Reservation()
-    {
-    #List Scopes
-    Get-DhcpServerv4Scope -ComputerName $DHCPServer | Select scopeID,Name,StartRange,EndRange | ft -AutoSize
     
-    do {$scope=Read-Host "Enter Scope ID"} until (validate-scope $scope)
-    do {$ip=Read-Host "Enter Reservation IP"} until (validate-IPAddress $ip)
-    do {$mac=Read-Host "Enter MAC Address (aa-ab-ac-a2-a3-a4)"} until (validate-HWAddress $mac)
-    $Hostname=Read-Host "Enter Reservation hostname"
-    $group=$(Get-Group)
-
-    $results=@()
-    $results=New-Object psobject -Property @{
-                                            "scope"=$scope
-                                            "ip"=$ip
-                                            "group"=$group
-                                            "mac"=if ($mac -eq "auto"){Generate-MacAddress}Else{$mac}
-                                            "Hostname"=$hostname
-                                            }
-    $results | ft -AutoSize
-
-    $response=Read-Host "Is this information correct? (Y/N)"
-    if ($response -eq "N"){Show-Information}
-
-    $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | `
-        ? {($_.name -eq $hostname) -or ($_.ipaddress -eq $ip) -or ($_.clientid -eq $mac)}
-
-    if ($res)
-        {
-        Write-Host "Reservation exists"
-        pause
-        Show-Information
-        }
-    Else
-        {
-        try {
-            Add-DhcpServerv4Reservation `
-                -ComputerName $DHCPServer `
-                -ScopeId $results.scope `
-                -IP $results.ip `
-                -Description $results.group `
-                -hostname $results.hostname `
-                -ClientId $results.mac `
-                -ea stop
-
-            Log-Event "INFO-" "$env:USERNAME Created a reservation IP: $($results.IP) MAC: $($results.mac) Host: $($results.hostName)"
-            }
-        Catch 
-            {
-            Show-Error $error[0]
-            Show-Information
-            }
-        }
-
-        try
-            {
-            Edit-FilterLists -list allow -Action add -mac $results.mac -HostName $results.hostname
-            }
-        catch
-            {
-            Show-Error $error[0]
-            Show-Information
-            }
-    Replicate-Reservation
-    }
-
-Function Remove-Reservation()
-    {
-    $data=Read-Host "Enter reservation information"
-        
-    $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | `
-    ? {($_.name -eq $data) -or ($_.ipaddress -eq $data) -or ($_.clientid -eq $data)}
-    
-    $res | ft -AutoSize
-
-    If ($(Read-Host "Confirm deletion? (y/n)") -eq "y")
-        {
-        # Archive-Lists $FileLocation $ArchiveLocation ** I think this is deleting the lists when we don't want it to. 
-        $res | Remove-DhcpServerv4Reservation -ComputerName $DHCPServer
-        Log-Event "INFO-" "$env:USERNAME Removed a reservation IP: $($res.IPAddress) MAC: $($res.ClientID) Host: $($res.Name)"
-
-        $res | % {Edit-FilterLists -list allow -Action remove -mac $_.ClientID -HostName $_.name}
-        
-        Replicate-Reservation
-        }
-   Else
-        {
-        "No reservation to remove"
-        }
-         
-    }
-
-Function Edit-Reservation()
-    {
-    $data=Read-Host "`nEnter reservation information (enter 'q' to quit)"
-    if ($data -eq "q"){Show-Information}
-    
-    $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | `
-    ? {($_.name -eq $data) -or ($_.ipaddress -eq $data) -or ($_.clientid -eq $data)}
-
-    if (-not($res))
-        {
-        "Reservation not found`n"
-        Edit-Reservation
-        }
-
-    $res | ft -AutoSize
-
-    "`t1 - MAC Address"
-    "`t2 - Host Name"
-    "`t3 - Group"
-    ""    
-    $Response=Read-Host "Select attribute to update"
-    
-    Archive-Lists $FileLocation $FileLocation
-
-    switch ($Response)
-        {
-        1 {$NewMac=read-host "Enter new mac address"
-            if ($mac -eq "auto"){$newmac=Generate-MacAddress}
-            try 
-                {
-                Set-DhcpServerv4Reservation -ComputerName $DHCPServer -ea stop -IPAddress $res.IPAddress -ClientID $newmac
-                Log-Event "INFO-" "$env:USERNAME Modified a reservation IP: $($res.IPAddress) MAC: $($res.ClientID) Host: $($res.Name)"
-                } 
-            catch {show-error $Error[0]}
-            try {Edit-FilterLists -ea stop -list allow -Action Remove -mac $res.ClientID -HostName $res.name} catch {show-error $Error[0]}
-            try {Edit-FilterLists -ea stop -list allow -Action add -mac $NewMac -HostName $res.name} catch {show-error $Error[0]}
-            }
-        2 {Set-DhcpServerv4Reservation -ComputerName $DHCPServer -IPAddress $res.IPAddress -Name $(read-host "Enter new host name")}
-        3 {Set-DhcpServerv4Reservation -ComputerName $DHCPServer -IPAddress $res.IPAddress -Description $(Get-Group)}
-        q {Show-Information}
-        }
-
-    $new=Get-DhcpServerv4Reservation -ComputerName $DHCPServer -IPAddress $res.IPAddress
-    $res
-    $new
-    pause
-    Replicate-Reservation
-    Return $new | ft -AutoSize
-    }
-
-Function Export-Reservation()
-    {
-    Archive-Lists $FileLocation $ArchiveLocation
-
-    $Groups=Get-Content $GroupLocation\groups.txt
-
-    foreach ($Group in $Groups)
-        {
-        $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | ? {$_.description -eq $Group}
-        if ($res)
-            {
-            $Res | % {$($_.IPAddress[0].ToString())+" "+$_.Name} | Out-File "$FileLocation\$group.txt"
-            }
-        }
-
-    $FIles=Get-ChildItem $FileLocation
-    Log-Event "INFO-" "$env:USERNAME Exported files $($Files)"
-    
-    Return $Files | ft LastWriteTime,Name -AutoSize 
-    }
-
-Function Find-Reservation()
-    {
-    $data=Read-Host "`nEnter reservation information (enter 'q' to quit)"
-    
-    if ($data -eq "q"){Show-Information}
-    
-    $res=Get-DhcpServerv4Scope -ComputerName $DHCPServer -ea SilentlyContinue | % {Get-DhcpServerv4Reservation -ComputerName $DHCPServer -ScopeId $_.scopeid -ErrorAction SilentlyContinue} | `
-        ? {($_.name -eq $data) -or ($_.ipaddress -eq $data) -or ($_.clientid -eq $data)  -or ($_.name -eq $data)  -or ($_.description -eq $data)}
-    
-    Return $res | ft -AutoSize
-    }
-
-Function Clean-Filters()
-    {
-    foreach ($reservation in $reservations)
-        {
-        if (-not(Get-DhcpServerv4Filter -ComputerName $DHCPServer -List Allow | ? {$_.MacAddress -eq $reservation.ClientID}))
-            {
-            Add-DhcpServerv4Filter -ComputerName $DHCPServer -List Allow -MacAddress $reservation.ClientID -Description $Reservation.Name -PassThru
-            }
-        }
-
-    foreach ($filter in $filters)
-        {
-        if ($reservations.clientID -notcontains $filter.MacAddress)
-            {
-            Remove-DhcpServerv4Filter -ComputerName $DHCPServer -MacAddress $filter.MacAddress -PassThru
-            }
-        }
-    }
-
 Show-Information
