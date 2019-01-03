@@ -4,3 +4,6 @@
 * Documentation - https://github.com/josephstreeter/DHCP-Res-Man/wiki
 * Project - https://github.com/josephstreeter/DHCP-Res-Man/projects/1
 * Issues - https://github.com/josephstreeter/DHCP-Res-Man/issues 
+
+# Documentation
+* Wiki - https://github.com/josephstreeter/DHCP-Res-Man/wiki
