@@ -371,7 +371,7 @@ Function Edit-Reservation()
     ""    
     $Response=Read-Host "Select attribute to update"
     
-    Archive-Lists $FileLocation $ArchiveLocation
+    #Archive-Lists $FileLocation $ArchiveLocation
 
     switch ($Response)
         {
@@ -396,7 +396,7 @@ Function Edit-Reservation()
 
 Function Export-Reservation()
     {
-    Archive-Lists $FileLocation $FileLocation
+    Archive-Lists $FileLocation $ArchiveLocation
 
     $Groups=Get-Content $GroupLocation\groups.txt
 
