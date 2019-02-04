@@ -371,7 +371,7 @@ Function Edit-Reservation()
     ""    
     $Response=Read-Host "Select attribute to update"
     
-    Archive-Lists $FileLocation $FileLocation
+    Archive-Lists $FileLocation $ArchiveLocation
 
     switch ($Response)
         {
